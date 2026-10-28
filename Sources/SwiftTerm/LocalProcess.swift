@@ -425,7 +425,10 @@ public class LocalProcess {
         if let pipeline = resources.pipeline {
             // A synchronous join can deadlock when the last owner releases the
             // process on the delivery queue while parsing waits in queue.sync.
-            DispatchQueue.global(qos: .utility).async {
+            // Match the worker threads' QoS: shutdown takes the pipeline's
+            // condition lock, and a user-initiated worker waking on it must not
+            // wait behind a lower-QoS owner (priority inversion).
+            DispatchQueue.global(qos: .userInitiated).async {
                 pipeline.shutdown()
             }
         }
@@ -460,6 +463,9 @@ public class LocalProcess {
     private static func startChildWaiter(_ body: @escaping @Sendable () -> Void) {
         let thread = Thread(block: body)
         thread.name = "swiftterm-child-reaper"
+        // The exit path drains the pipeline under its condition lock; run at
+        // the workers' QoS so they never wait on a lower-QoS lock owner.
+        thread.qualityOfService = .userInitiated
         thread.start()
     }
 
